@@ -1,7 +1,15 @@
 "use strict";
 
+/*
+Copyright (c) 2016-2017 Ramón Baas
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+
 const powermax = require('powermax-api');
-const triggers = [ 'zonealarm', 'panelalarm', 'paneltrouble', 'battery' ]; // triggers that need state check
+const triggers = [ 'panelalarm', 'paneltrouble', 'zoneBattery', 'zoneTripAlarm' ]; // triggers that need state check
 const locale = Homey.manager('i18n').getLanguage() == 'nl' ? 'nl' : 'en'; // only Dutch & English supported
 
 // Handler for open zones question
@@ -20,7 +28,7 @@ function openZoneSpeechHandler(id, speech) {
 		if (cnt == 0) {
 			var txt = __('speech.no_open_zone', { panel: name });
 			powermax.debug(txt);
-			Homey.manager('speech-output').say(txt, speech);
+			speech.say(txt);
 		} else {
 			zones = zones.slice(0, -2); // remove last ', ';
 			var txt;
@@ -30,7 +38,7 @@ function openZoneSpeechHandler(id, speech) {
 				txt = __('speech.open_zones', {  panel: name, cnt: cnt, zones: zones });
 			}
 			powermax.debug(txt);
-			Homey.manager('speech-output').say(txt, speech);
+			speech.say(txt);
 		}
 	}
 }
@@ -63,7 +71,7 @@ function defaultSpeechHandler(idx, speech) {
 				txt = __(word + '.more', {  panel: name, cnt: cnt, items: items });
 			}
 			powermax.debug(txt);
-			Homey.manager('speech-output').say(txt, speech);
+			speech.say(txt);
 		}
 	}
 }
@@ -100,7 +108,7 @@ function statusSpeechHandler(idx, speech) {
 				// Make a neat sentence
 				txt = txt[0].toUpperCase() + txt.slice(1) + '.';
 				powermax.debug(txt);
-				Homey.manager('speech-output').say(txt, speech);
+				speech.say(txt);
 			}
 		}
 	}
@@ -109,9 +117,9 @@ function statusSpeechHandler(idx, speech) {
 // Trouble handler
 function troubleSpeechHandler(idx, speech) {
 	const items = {
-		panel: { en: 'panel', nl: 'paneel' }, 
-		alarm: { en: 'alarm', nl: 'alarm' }, 
-		battery: { en: 'low battery', nl: 'lage batterijspanning' }, 
+		panel: { en: 'panel', nl: 'paneel' },
+		alarm: { en: 'alarm', nl: 'alarm' },
+		battery: { en: 'low battery', nl: 'lage batterijspanning' },
 		tamper: { en: 'tamper', nl: 'sabotage' }
 	};
 	// Check for each alarm panel
@@ -148,7 +156,7 @@ function troubleSpeechHandler(idx, speech) {
 			txt = txt[0].toUpperCase() + txt.slice(1) + '.';
 		}
 		powermax.debug(txt);
-		Homey.manager('speech-output').say(txt, speech);
+		speech.say(txt);
 	}
 }
 
@@ -163,38 +171,56 @@ const speechTriggers = [
 // Start of the app
 function init() {
 	Homey.log("Starting PowerMax app!");
+	powermax.setDebug(true);
 
 	// Catch triggers
-	for (var i = 0; i < triggers.length; i++) {
+	for (let i = 0; i < triggers.length; i++) {
 		Homey.manager('flow').on('trigger.' + triggers[i], function(callback, args, state) {
-			var result = (state.state == false) != (args.values == 'on');
+			let result = (state.state == false) != (args.values == 'on');
 			powermax.debug('>> Checked action ' + triggers[i] + ' for ' + state.state + ' = ' + args.values + ', result = ' + result);
 			callback(null, result);
 		});
 	}
-	
+
 	// Check conditions
 	Homey.manager('flow').on('condition.sysflags', function(callback, args) {
-		var id = args.device.id;
-		var check = powermax.getPanelValue(id, args.flag);
+		let id = args.device.id;
+		let check = powermax.getPanelValue(id, args.flag);
 		callback(null, check);
 	});
-	
+
 	// Register actions
 	Homey.manager('flow').on('action.setClock', function(callback, args) {
 		powermax.debug('Action setClock ' + args.device.id);
-		var ok = powermax.setClock(args.device.id);
+		let ok = powermax.setClock(args.device.id);
 		callback(null, ok);
 	});
-	
+
+	Homey.manager('flow').on('action.setState', function(callback, args) {
+		powermax.debug('Action setState ' + args.device.id, args.state);
+		powermax.setPanelState(args.device.id, args.state, (err, ok) => callback(err, ok));
+	});
+
+	Homey.manager('flow').on('action.bypassOn', function(callback, args) {
+		powermax.debug('Action bypass ' + args.device.id);
+		let ok = powermax.setZoneBypass(args.device.panel, args.device.zone, true);
+		callback((ok ? null : 'Not allowed'), ok);
+	});
+
+	Homey.manager('flow').on('action.bypassOff', function(callback, args) {
+		powermax.debug('Action bypass ' + args.device.id);
+		let ok = powermax.setZoneBypass(args.device.panel, args.device.zone, false);
+		callback((ok ? null : 'Not allowed'), ok);
+	});
+
 	// Register speech actions
 	Homey.manager('speech-input').on('speech', function(speech, callback) {
-		var matched = false;
+		let matched = false;
 		powermax.debug('Received speech trigger');
-		for (var i = 0; i < speechTriggers.length; i++) {
-			var match = 0;
+		for (let i = 0; i < speechTriggers.length; i++) {
+			let match = 0;
 			speech.triggers.forEach(function(trigger) {
-				for (var m = 0; m < speechTriggers[i].says.length; m++) {
+				for (let m = 0; m < speechTriggers[i].says.length; m++) {
 					if (trigger.id == speechTriggers[i].says[m]) {
 						match++;
 					}
@@ -203,19 +229,22 @@ function init() {
 			matched = match == speechTriggers[i].says.length;
 			if (matched) {
 				powermax.debug('Match on ' + speechTriggers[i].says);
-				var handler = speechTriggers[i].handler || defaultSpeechHandler;
+				let handler = speechTriggers[i].handler || defaultSpeechHandler;
 				handler(i, speech);
 			}
 		}
 		callback(matched ? null : true, matched ? true : null);
 	});
+
 }
 
 
 var api = {
+	getPanels: powermax.getPanels,
+	getEventLog: powermax.getEventLog
 }
 
-module.exports = { 
+module.exports = {
 	init: init,
 	api: api
 }
